@@ -78,8 +78,7 @@ async function sendInstalacaoMenu(sock, jid) {
         text: 'O que você precisa?',
         footer: 'Atendimento 24h',
         buttons: [
-            { id: 'ins_camera', text: '📷 Instalar Câmeras' },      // NOVO
-            { id: 'ins_visita', text: 'Agendar visita' },
+            { id: 'ins_motor', text: 'motores' },
             { id: 'ins_manual', text: 'Manuais e tutoriais' },
             { id: 'ins_tecnico', text: 'Suporte técnico' },
             { id: 'voltar_menu', text: '🔙 Voltar' },
@@ -271,13 +270,8 @@ async function handleButtonClick({ sock, jid, button }) {
             break;
 
         // Sub‑menu Instalação
-        case 'ins_camera':
-            // Inicia o fluxo de coleta para instalação de câmeras
-            await startCameraInstallation(sock, jid, session);
-            break;
-
-        case 'ins_visita':
-            await sock.sendMessage(jid, { text: '📅 Para agendar uma visita, por favor informe seu endereço e melhor horário. (Em breve integração com calendário)' });
+        case 'ins_motor':
+            await sock.sendMessage(jid, { text: 'motor' });
             break;
         case 'ins_manual':
             await sock.sendMessage(jid, { text: '📖 Manuais disponíveis em: https://exemplo.com/manuais' });
