@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@ryuu-reinzz/button-helper": "^2.2.3",
+    "@whiskeysockets/baileys": "^7.0.0-rc.8",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
