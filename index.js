@@ -76,6 +76,125 @@ async function sendmenu_orcamento(sock, jid) {
     });
 }
 
+async function sendmenu_manutencao(sock, jid) {
+    await sendButtons(sock, jid, {
+        title: '🔧 Manutenção',
+        text: 'Selecione o tipo de manutenção:',
+        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        buttons: [
+            { id: 'manut_motor', text: '🔧 Motor' },
+            { id: 'manut_camera', text: '📷 Câmeras' },
+            { id: 'manut_alarme', text: '🚨 Alarme' },
+            { id: 'manut_interfonia', text: '📞 Interfonia' },
+            { id: 'manut_cerca', text: '⚡ Cerca Elétrica' },
+            { id: 'manut_solar', text: '☀️ Painéis Solares' },
+            { id: 'voltar_menu', text: '🔙 Voltar ao menu principal' },
+        ],
+    });
+}
+
+async function startManutencaoColeta(sock, jid, session, tipo) {
+    session.state = 'coleta_dados';
+    session.manutencao_tipo = tipo;
+    session.data = { tipo_manutencao: tipo };
+    session.perguntas = [
+        {
+            pergunta: 'Qual é o seu nome?',
+            campo: 'nome',
+            validacao: (v) => v.trim().length > 2,
+        },
+        {
+            pergunta: 'Qual a marca do equipamento?',
+            campo: 'marca',
+            validacao: (v) => v.trim().length > 0,
+        },
+        {
+            pergunta: 'Descreva o problema que está ocorrendo:',
+            campo: 'problema',
+            validacao: (v) => v.trim().length > 5,
+        },
+        {
+            pergunta: 'Quando o problema começou?',
+            campo: 'quando',
+            validacao: (v) => v.trim().length > 0,
+        },
+        {
+            pergunta: 'Qual é o seu endereço completo? (CEP - Cidade - Rua - nº)',
+            campo: 'endereco',
+            validacao: (v) => v.trim().length > 5,
+        },
+       {
+            pergunta: 'Qual o melhor horário para agendarmos a visita técnica?',
+            campo: 'horario',
+            validacao: (v) => ['manhã', 'tarde'].includes(v.toLowerCase()),
+            botoes: true,
+            opcoes: [
+                { id: 'horario_manha', text: 'Parte da manhã' },
+                { id: 'horario_tarde', text: 'Parte da tarde' }
+            ]
+        }
+    ];
+    session.step = 0;
+
+    await sock.sendMessage(jid, { text: session.perguntas[0].pergunta });
+}
+
+async function finalizarColetaManutencao(sock, jid, session) {
+    const data = session.data;
+    const tipoManutencao = session.manutencao_tipo || 'Não especificado';
+    
+    let resumo = '🔧 *ORDEM DE SERVIÇO - MANUTENÇÃO*\n\n';
+    resumo += `📋 *Tipo:* ${tipoManutencao}\n`;
+    resumo += `👤 *Cliente:* ${data.nome || 'Não informado'}\n`;
+    resumo += `🔢 *Marca Equipamento:* ${data.numero_serie || 'Não informado'}\n`;
+    resumo += `⚠️ *Problema:* ${data.problema || 'Não informado'}\n`;
+    resumo += `📅 *Início do problema:* ${data.quando || 'Não informado'}\n`;
+    resumo += `🏠 *Endereço:* ${data.endereco || 'Não informado'}\n`;
+    resumo += `🕐 *Horário preferencial:* ${data.horario || 'Não informado'}\n\n`;
+    resumo += '✅ *Em breve entraremos em contato para agendar a instalação.*';
+
+    await sock.sendMessage(jid, { text: resumo });
+
+    // Limpa a sessão e volta ao menu principal
+    session.state = 'main_menu';
+    session.data = {};
+    session.step = 0;
+    session.perguntas = [];
+    session.manutencao_tipo = null;
+    await sendMainMenu(sock, jid);
+}
+
+async function handleColetaResposta({ sock, jid, text, session }) {
+    const perguntas = session.perguntas;
+    const step = session.step;
+
+    if (step >= perguntas.length) {
+        await finalizarColetaManutencao(sock, jid, session);
+        return;
+    }
+
+    const perguntaAtual = perguntas[step];
+    const campo = perguntaAtual.campo;
+    const validacao = perguntaAtual.validacao;
+
+    if (validacao && !validacao(text)) {
+        await sock.sendMessage(jid, { text: '❌ Resposta inválida. Por favor, responda novamente.' });
+        await sock.sendMessage(jid, { text: perguntaAtual.pergunta });
+        return;
+    }
+
+    session.data[campo] = text.trim();
+    session.step++;
+
+    if (session.step >= perguntas.length) {
+        await finalizarColetaManutencao(sock, jid, session);
+    } else {
+        const proximaPergunta = perguntas[session.step];
+        await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
+    }
+}
+
+
 async function sendImpressoesMenu(sock, jid) {
     await sendButtons(sock, jid, {
         title: '🖨️ Impressões 3D',
