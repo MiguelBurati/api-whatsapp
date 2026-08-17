@@ -46,42 +46,32 @@ function getSession(userJid) {
 
 async function sendMainMenu(sock, jid) {
     await sendButtons(sock, jid, {
-        title: '👋 Olá! Seja bem‑vindo(a)!',
-        text: 'Como posso ajudar você hoje? Escolha uma opção:',
-        footer: 'Atendimento 24h',
+        title: '👋 Olá! Seja bem‑vindo(a) à nossa central de atendimento!',
+        text: 'Selecione a opção desejada para continuar:',
+        footer: '💡 Estamos aqui para ajudar 24h por dia!',
         buttons: [
-            { id: 'menu_suporte', text: '🛠️ Suporte' },
-            { id: 'menu_instalacao', text: '🔧 Instalação' },
-            { id: 'menu_impressoes', text: '🖨️ Impressões 3D' },
-            { id: 'menu_cancelar', text: '❌ Cancelar' },
+            { id: 'menu_orcamento', text: '1️⃣ Orçamento' },
+            { id: 'menu_manutencao', text: '2️⃣ Manutenção' },
+            { id: 'menu_administracao', text: '3️⃣ Administração/Financeiro' },
+            { id: 'menu_impressoes3d', text: '4️⃣ Impressões 3D' },
+            { id: 'menu_outros', text: '5️⃣ Outros' },
         ],
     });
 }
 
-async function sendSuporteMenu(sock, jid) {
+async function sendmenu_orcamento(sock, jid) {
     await sendButtons(sock, jid, {
-        title: '🛠️ Suporte',
-        text: 'Escolha uma das opções abaixo:',
-        footer: 'Atendimento 24h',
+        title: '💰 Orçamento',
+        text: 'Selecione o tipo de orçamento que deseja:',
+        footer: '💡 Estamos aqui para ajudar 24h por dia!',
         buttons: [
-            { id: 'sup_atendente', text: 'Falar com atendente' },
-            { id: 'sup_faq', text: 'Perguntas frequentes' },
-            { id: 'sup_chamado', text: 'Abrir chamado' },
-            { id: 'voltar_menu', text: '🔙 Voltar' },
-        ],
-    });
-}
-
-async function sendInstalacaoMenu(sock, jid) {
-    await sendButtons(sock, jid, {
-        title: '🔧 Instalação',
-        text: 'O que você precisa?',
-        footer: 'Atendimento 24h',
-        buttons: [
-            { id: 'ins_motor', text: 'motores' },
-            { id: 'ins_manual', text: 'Manuais e tutoriais' },
-            { id: 'ins_tecnico', text: 'Suporte técnico' },
-            { id: 'voltar_menu', text: '🔙 Voltar' },
+            { id: 'orc_motor', text: '🔧 Motor' },
+            { id: 'orc_camera', text: '📷 Câmera' },
+            { id: 'orc_alarme', text: '🚨 Alarme' },
+            { id: 'orc_interfonia', text: '📞 Interfonia' },
+            { id: 'orc_cerca_eletrica', text: '⚡ Cerca Elétrica/Concertina' },
+            { id: 'orc_paineis_solares', text: '☀️ Painéis Solares' },
+            { id: 'voltar_menu', text: '🔙 Voltar ao menu principal' },
         ],
     });
 }
