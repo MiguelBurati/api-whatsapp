@@ -49,7 +49,7 @@ async function sendMainMenu(sock, jid) {
     await sendButtons(sock, jid, {
         title: '👋 Olá! Seja bem‑vindo(a) à nossa central de atendimento!',
         text: 'Selecione a opção desejada para continuar:',
-        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        footer: '💡 Estamos aqui para ajudar!',
         buttons: [
             { id: 'menu_orcamento', text: '1️⃣ Orçamento' },
             { id: 'menu_manutencao', text: '2️⃣ Manutenção' },
@@ -64,7 +64,7 @@ async function sendmenu_orcamento(sock, jid) {
     await sendButtons(sock, jid, {
         title: '💰 Orçamento',
         text: 'Selecione o tipo de orçamento que deseja:',
-        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        footer: '💡 Estamos aqui para ajudar!',
         buttons: [
             { id: 'orc_motor', text: '🔧 Motor' },
             { id: 'orc_camera', text: '📷 Câmera' },
@@ -81,7 +81,7 @@ async function sendmenu_manutencao(sock, jid) {
     await sendButtons(sock, jid, {
         title: '🔧 Manutenção',
         text: 'Selecione o tipo de manutenção:',
-        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        footer: '💡 Estamos aqui para ajudar!',
         buttons: [
             { id: 'manut_motor', text: '🔧 Motor' },
             { id: 'manut_camera', text: '📷 Câmeras' },
@@ -248,13 +248,12 @@ async function handleColetaResposta({ sock, jid, text, session }) {
     }
 }
 
-// -------------------- OUTRAS FUNÇÕES DE MENU --------------------
+// -------------------- funções impressoes3d --------------------
 
 async function sendImpressoesMenu(sock, jid) {
     await sendButtons(sock, jid, {
         title: '🖨️ Impressões 3D',
         text: 'Selecione uma ação:',
-        footer: '💡 Atendimento 24h',
         buttons: [
             { id: 'imp_catalogo', text: '🖼️ Ver catálogo' },
             { id: 'imp_orcamento', text: '💰 Solicitar orçamento' },
@@ -269,7 +268,7 @@ async function sendAdministracaoMenu(sock, jid) {
     await sendButtons(sock, jid, {
         title: '📊 Administração/Financeiro',
         text: 'Selecione uma opção:',
-        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        footer: '💡 Estamos aqui para ajudar!',
         buttons: [
             { id: 'admin_fatura', text: '📄 Fatura/Nota Fiscal' },
             { id: 'admin_pagamento', text: '💳 Formas de Pagamento' },
@@ -283,7 +282,7 @@ async function sendOutrosMenu(sock, jid) {
     await sendButtons(sock, jid, {
         title: '📋 Outros Serviços',
         text: 'Selecione uma opção ou nos conte o que precisa:',
-        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        footer: '💡 Estamos aqui para ajudar!',
         buttons: [
             { id: 'outros_duvidas', text: '❓ Dúvidas Gerais' },
             { id: 'outros_parceria', text: '🤝 Parcerias' },
@@ -433,39 +432,7 @@ async function handleButtonClick({ sock, jid, button }) {
             await startManutencaoColeta(sock, jid, session, 'Painéis Solares');
             break;
 
-        case 'admin_fatura':
-            await sock.sendMessage(jid, { text: '📄 Para solicitar uma segunda via de fatura ou NF, informe seu CPF/CNPJ.' });
-            break;
-        case 'admin_pagamento':
-            await sock.sendMessage(jid, { text: '💳 Aceitamos cartão de crédito/débito, PIX, boleto bancário e transferência.' });
-            break;
-        case 'admin_suporte':
-            await sock.sendMessage(jid, { text: '👨‍💼 Em breve um especialista do financeiro entrará em contato.' });
-            break;
-
-        case 'imp_catalogo':
-            await sock.sendMessage(jid, { text: '🖼️ Catálogo de produtos: https://exemplo.com/catalogo' });
-            break;
-        case 'imp_orcamento':
-            await sock.sendMessage(jid, { text: '💰 Para solicitar um orçamento, envie o arquivo 3D (STL/OBJ).' });
-            break;
-        case 'imp_consulta':
-            await sock.sendMessage(jid, { text: '🔍 Para consultar seu pedido, informe o número do pedido.' });
-            break;
-        case 'imp_alterar':
-            await sock.sendMessage(jid, { text: '✏️ Para alterar um pedido, informe o número do pedido.' });
-            break;
-
-        case 'outros_duvidas':
-            await sock.sendMessage(jid, { text: '❓ Envie sua dúvida e responderemos o mais breve possível.' });
-            break;
-        case 'outros_parceria':
-            await sock.sendMessage(jid, { text: '🤝 Para parcerias, envie um e-mail para parcerias@empresa.com' });
-            break;
-        case 'outros_falar_atendente':
-            await sock.sendMessage(jid, { text: '💬 Em breve um atendente estará disponível para conversar.' });
-            break;
-
+        
         case 'voltar_menu':
             session.state = 'main_menu';
             await sendMainMenu(sock, jid);
