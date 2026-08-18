@@ -25,18 +25,19 @@ function unwrapMessage(msg) {
     return cur || msg;
 }
 
-// -------------------- SESSÃO DO USUÁRIO (em memória) --------------------
-// Usamos o JID do usuário como chave (porque é um único bot)
+// -------------------- SESSÃO DO USUÁRIO --------------------
 const userSession = new Map();
 
 function getSession(userJid) {
     if (!userSession.has(userJid)) {
         userSession.set(userJid, {
-            state: 'main_menu',      // 'main_menu' | 'coleta_dados'
-            data: {},                // respostas coletadas
-            step: 0,                 // índice da pergunta atual
-            perguntas: [],           // lista de perguntas
-            greeted: false
+            state: 'main_menu',
+            data: {},
+            step: 0,
+            perguntas: [],
+            greeted: false,
+            manutencao_tipo: null,
+            aguardando_botao_horario: false
         });
     }
     return userSession.get(userJid);
@@ -93,10 +94,13 @@ async function sendmenu_manutencao(sock, jid) {
     });
 }
 
+// ========== FUNÇÕES DE MANUTENÇÃO ==========
+
 async function startManutencaoColeta(sock, jid, session, tipo) {
     session.state = 'coleta_dados';
     session.manutencao_tipo = tipo;
     session.data = { tipo_manutencao: tipo };
+    session.aguardando_botao_horario = false;
     session.perguntas = [
         {
             pergunta: 'Qual é o seu nome?',
@@ -123,14 +127,14 @@ async function startManutencaoColeta(sock, jid, session, tipo) {
             campo: 'endereco',
             validacao: (v) => v.trim().length > 5,
         },
-       {
+        {
             pergunta: 'Qual o melhor horário para agendarmos a visita técnica?',
             campo: 'horario',
             validacao: (v) => ['manhã', 'tarde'].includes(v.toLowerCase()),
             botoes: true,
             opcoes: [
-                { id: 'horario_manha', text: 'Parte da manhã' },
-                { id: 'horario_tarde', text: 'Parte da tarde' }
+                { id: 'horario_manha', text: '🌅 Parte da manhã' },
+                { id: 'horario_tarde', text: '🌇 Parte da tarde' }
             ]
         }
     ];
@@ -143,30 +147,62 @@ async function finalizarColetaManutencao(sock, jid, session) {
     const data = session.data;
     const tipoManutencao = session.manutencao_tipo || 'Não especificado';
     
+    let horario = data.horario || 'Não informado';
+    const horarioMap = {
+        'manhã': '🌅 Parte da manhã',
+        'manha': '🌅 Parte da manhã',
+        'tarde': '🌇 Parte da tarde'
+    };
+    horario = horarioMap[horario.toLowerCase()] || horario;
+
     let resumo = '🔧 *ORDEM DE SERVIÇO - MANUTENÇÃO*\n\n';
     resumo += `📋 *Tipo:* ${tipoManutencao}\n`;
     resumo += `👤 *Cliente:* ${data.nome || 'Não informado'}\n`;
-    resumo += `🔢 *Marca Equipamento:* ${data.numero_serie || 'Não informado'}\n`;
+    resumo += `🔢 *Marca Equipamento:* ${data.marca || 'Não informado'}\n`;
     resumo += `⚠️ *Problema:* ${data.problema || 'Não informado'}\n`;
     resumo += `📅 *Início do problema:* ${data.quando || 'Não informado'}\n`;
     resumo += `🏠 *Endereço:* ${data.endereco || 'Não informado'}\n`;
-    resumo += `🕐 *Horário preferencial:* ${data.horario || 'Não informado'}\n\n`;
-    resumo += '✅ *Em breve entraremos em contato para agendar a instalação.*';
+    resumo += `🕐 *Horário preferencial:* ${horario}\n\n`;
+    resumo += '✅ *Em breve entraremos em contato para agendar a manutenção*';
 
     await sock.sendMessage(jid, { text: resumo });
 
-    // Limpa a sessão e volta ao menu principal
     session.state = 'main_menu';
     session.data = {};
     session.step = 0;
     session.perguntas = [];
     session.manutencao_tipo = null;
+    session.aguardando_botao_horario = false;
     await sendMainMenu(sock, jid);
 }
 
 async function handleColetaResposta({ sock, jid, text, session }) {
     const perguntas = session.perguntas;
     const step = session.step;
+
+    if (session.aguardando_botao_horario) {
+        const perguntaAtual = perguntas[step];
+        const campo = perguntaAtual.campo;
+        const validacao = perguntaAtual.validacao;
+
+        if (validacao && !validacao(text)) {
+            await sock.sendMessage(jid, { text: '❌ Resposta inválida. Por favor, responda novamente.' });
+            await sock.sendMessage(jid, { text: perguntaAtual.pergunta });
+            return;
+        }
+
+        session.data[campo] = text.trim();
+        session.step++;
+        session.aguardando_botao_horario = false;
+
+        if (session.step >= perguntas.length) {
+            await finalizarColetaManutencao(sock, jid, session);
+        } else {
+            const proximaPergunta = perguntas[session.step];
+            await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
+        }
+        return;
+    }
 
     if (step >= perguntas.length) {
         await finalizarColetaManutencao(sock, jid, session);
@@ -176,6 +212,20 @@ async function handleColetaResposta({ sock, jid, text, session }) {
     const perguntaAtual = perguntas[step];
     const campo = perguntaAtual.campo;
     const validacao = perguntaAtual.validacao;
+
+    if (perguntaAtual.botoes) {
+        await sendButtons(sock, jid, {
+            title: '🕐 Agendamento',
+            text: perguntaAtual.pergunta,
+            footer: '💡 Selecione uma opção:',
+            buttons: perguntaAtual.opcoes.map(op => ({
+                id: op.id,
+                text: op.text
+            }))
+        });
+        session.aguardando_botao_horario = true;
+        return;
+    }
 
     if (validacao && !validacao(text)) {
         await sock.sendMessage(jid, { text: '❌ Resposta inválida. Por favor, responda novamente.' });
@@ -190,119 +240,57 @@ async function handleColetaResposta({ sock, jid, text, session }) {
         await finalizarColetaManutencao(sock, jid, session);
     } else {
         const proximaPergunta = perguntas[session.step];
-        await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
+        if (proximaPergunta.botoes) {
+            await handleColetaResposta({ sock, jid, text: '', session });
+        } else {
+            await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
+        }
     }
 }
 
+// -------------------- OUTRAS FUNÇÕES DE MENU --------------------
 
 async function sendImpressoesMenu(sock, jid) {
     await sendButtons(sock, jid, {
         title: '🖨️ Impressões 3D',
         text: 'Selecione uma ação:',
-        footer: 'Atendimento 24h',
+        footer: '💡 Atendimento 24h',
         buttons: [
-            { id: 'imp_catalogo', text: 'Ver catálogo' },
-            { id: 'imp_orcamento', text: 'Solicitar orçamento' },
-            { id: 'imp_consulta', text: 'Consultar pedido' },
-            { id: 'imp_alterar', text: 'Alterar pedido' },
+            { id: 'imp_catalogo', text: '🖼️ Ver catálogo' },
+            { id: 'imp_orcamento', text: '💰 Solicitar orçamento' },
+            { id: 'imp_consulta', text: '🔍 Consultar pedido' },
+            { id: 'imp_alterar', text: '✏️ Alterar pedido' },
             { id: 'voltar_menu', text: '🔙 Voltar' },
         ],
     });
 }
 
-// -------------------- COLEÇÃO DE DADOS (INSTALAÇÃO DE CÂMERAS) --------------------
-
-async function startCameraInstallation(sock, jid, session) {
-    session.state = 'coleta_dados';
-    session.data = { tipo: 'Instalação de Câmeras' };
-    session.perguntas = [
-        {
-            pergunta: 'Qual é o seu nome completo?',
-            campo: 'nome',
-            validacao: (v) => v.trim().length > 2,
-        },
-        {
-            pergunta: 'Quantas câmeras você deseja instalar?',
-            campo: 'quantidade',
-            validacao: (v) => !isNaN(v) && Number(v) > 0,
-        },
-        {
-            pergunta: 'O local é interno ou externo? (responda "interno" ou "externo")',
-            campo: 'local',
-            validacao: (v) => ['interno', 'externo'].includes(v.toLowerCase()),
-        },
-        {
-            pergunta: 'Tem acesso a Wi-Fi no local? (responda "sim" ou "não")',
-            campo: 'wifi',
-            validacao: (v) => ['sim', 'não', 'nao'].includes(v.toLowerCase()),
-        },
-        {
-            pergunta: 'Qual é o seu endereço completo? (CEP - Cidade - Rua - nº)',
-            campo: 'endereco',
-            validacao: (v) => v.trim().length > 5, // mínimo razoável
-        }
-    ];
-    session.step = 0;
-
-    // Envia a primeira pergunta
-    await sock.sendMessage(jid, { text: session.perguntas[0].pergunta });
+async function sendAdministracaoMenu(sock, jid) {
+    await sendButtons(sock, jid, {
+        title: '📊 Administração/Financeiro',
+        text: 'Selecione uma opção:',
+        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        buttons: [
+            { id: 'admin_fatura', text: '📄 Fatura/Nota Fiscal' },
+            { id: 'admin_pagamento', text: '💳 Formas de Pagamento' },
+            { id: 'admin_suporte', text: '👨‍💼 Falar com Financeiro' },
+            { id: 'voltar_menu', text: '🔙 Voltar ao menu principal' },
+        ],
+    });
 }
 
-// Processa cada resposta durante a coleta
-async function handleColetaResposta({ sock, jid, text, session }) {
-    const perguntas = session.perguntas;
-    const step = session.step;
-
-    if (step >= perguntas.length) {
-        // Segurança: se já terminou, finaliza
-        await finalizarColeta(sock, jid, session);
-        return;
-    }
-
-    const perguntaAtual = perguntas[step];
-    const campo = perguntaAtual.campo;
-    const validacao = perguntaAtual.validacao;
-
-    // Valida a resposta
-    if (validacao && !validacao(text)) {
-        await sock.sendMessage(jid, { text: '❌ Resposta inválida. Por favor, responda novamente.' });
-        await sock.sendMessage(jid, { text: perguntaAtual.pergunta });
-        return;
-    }
-
-    // Armazena a resposta
-    session.data[campo] = text.trim();
-
-    // Avança para a próxima pergunta
-    session.step++;
-
-    if (session.step >= perguntas.length) {
-        await finalizarColeta(sock, jid, session);
-    } else {
-        const proximaPergunta = perguntas[session.step];
-        await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
-    }
-}
-
-// Finaliza e exibe o resumo
-async function finalizarColeta(sock, jid, session) {
-    const data = session.data;
-    let resumo = '📋 *ORDEM DE SERVIÇO - INSTALAÇÃO DE CÂMERAS*\n\n';
-    resumo += `👤 *Cliente:* ${data.nome || 'Não informado'}\n`;
-    resumo += `📦 *Quantidade:* ${data.quantidade || 'Não informado'}\n`;
-    resumo += `📍 *Local:* ${data.local || 'Não informado'}\n`;
-    resumo += `📶 *Wi-Fi disponível:* ${data.wifi || 'Não informado'}\n`;
-    resumo += `🏠 *Endereço:* ${data.endereco || 'Não informado'}\n\n`;
-    resumo += '✅ *Em breve entraremos em contato para agendar a instalação.*';
-
-    await sock.sendMessage(jid, { text: resumo });
-
-    // Limpa a sessão e volta ao menu principal
-    session.state = 'main_menu';
-    session.data = {};
-    session.step = 0;
-    session.perguntas = [];
-    await sendMainMenu(sock, jid);
+async function sendOutrosMenu(sock, jid) {
+    await sendButtons(sock, jid, {
+        title: '📋 Outros Serviços',
+        text: 'Selecione uma opção ou nos conte o que precisa:',
+        footer: '💡 Estamos aqui para ajudar 24h por dia!',
+        buttons: [
+            { id: 'outros_duvidas', text: '❓ Dúvidas Gerais' },
+            { id: 'outros_parceria', text: '🤝 Parcerias' },
+            { id: 'outros_falar_atendente', text: '💬 Falar com Atendente' },
+            { id: 'voltar_menu', text: '🔙 Voltar ao menu principal' },
+        ],
+    });
 }
 
 // -------------------- HANDLERS DE TEXTO E BOTÕES --------------------
@@ -310,13 +298,11 @@ async function finalizarColeta(sock, jid, session) {
 async function handleTextCommand({ sock, jid, text }) {
     const session = getSession(jid);
 
-    // Se está em coleta, redireciona
     if (session.state === 'coleta_dados') {
         await handleColetaResposta({ sock, jid, text, session });
         return;
     }
 
-    // Primeira mensagem do usuário
     if (!session.greeted) {
         session.greeted = true;
         session.state = 'main_menu';
@@ -324,19 +310,19 @@ async function handleTextCommand({ sock, jid, text }) {
         return;
     }
 
-    // Comandos manuais
     const lower = text.toLowerCase();
     if (lower === 'ajuda' || lower === 'menu') {
         session.state = 'main_menu';
         await sendMainMenu(sock, jid);
     } else if (lower === 'cancelar') {
-        await sock.sendMessage(jid, { text: 'Operação cancelada. Digite "menu" para recomeçar.' });
+        await sock.sendMessage(jid, { text: '❌ Operação cancelada. Digite "menu" para recomeçar.' });
         session.state = 'main_menu';
         session.data = {};
         session.step = 0;
         session.perguntas = [];
+        session.manutencao_tipo = null;
     } else {
-        await sock.sendMessage(jid, { text: 'Não entendi. Digite "ajuda" para ver as opções.' });
+        await sock.sendMessage(jid, { text: '❓ Não entendi. Digite "ajuda" para ver as opções ou "menu" para voltar.' });
     }
 }
 
@@ -345,78 +331,155 @@ async function handleButtonClick({ sock, jid, button }) {
     const { id, label } = button;
     console.log(`Botão clicado: ${id} (${label})`);
 
+    // Botões de horário
+    if (id === 'horario_manha') {
+        const perguntas = session.perguntas;
+        const step = session.step;
+        if (step < perguntas.length) {
+            session.data[perguntas[step].campo] = 'manhã';
+        }
+        session.step++;
+        session.aguardando_botao_horario = false;
+        
+        if (session.step >= perguntas.length) {
+            await finalizarColetaManutencao(sock, jid, session);
+        } else {
+            const proximaPergunta = perguntas[session.step];
+            await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
+        }
+        return;
+    }
+    
+    if (id === 'horario_tarde') {
+        const perguntas = session.perguntas;
+        const step = session.step;
+        if (step < perguntas.length) {
+            session.data[perguntas[step].campo] = 'tarde';
+        }
+        session.step++;
+        session.aguardando_botao_horario = false;
+        
+        if (session.step >= perguntas.length) {
+            await finalizarColetaManutencao(sock, jid, session);
+        } else {
+            const proximaPergunta = perguntas[session.step];
+            await sock.sendMessage(jid, { text: proximaPergunta.pergunta });
+        }
+        return;
+    }
+
     switch (id) {
-        // Menu principal
-        case 'menu_suporte':
-            session.state = 'suporte';
-            await sendSuporteMenu(sock, jid);
+        case 'menu_orcamento':
+            await sendmenu_orcamento(sock, jid);
             break;
 
-        case 'menu_instalacao':
-            session.state = 'instalacao';
-            await sendInstalacaoMenu(sock, jid);
+        case 'menu_manutencao':
+            await sendmenu_manutencao(sock, jid);
             break;
 
-        case 'menu_impressoes':
-            session.state = 'impressoes';
+        case 'menu_administracao':
+            await sendAdministracaoMenu(sock, jid);
+            break;
+
+        case 'menu_impressoes3d':
             await sendImpressoesMenu(sock, jid);
             break;
 
-        case 'menu_cancelar':
-            await sock.sendMessage(jid, { text: 'Atendimento encerrado. Digite "menu" quando quiser recomeçar.' });
-            session.state = 'main_menu';
+        case 'menu_outros':
+            await sendOutrosMenu(sock, jid);
             break;
 
-        // Sub‑menu Suporte
-        case 'sup_atendente':
-            await sock.sendMessage(jid, { text: '🔜 Em breve você será conectado a um atendente. (Ainda em desenvolvimento)' });
+        case 'orc_motor':
+            await sock.sendMessage(jid, { text: '🔧 Orçamento para Motor - Nossa equipe entrará em contato em breve.' });
             break;
-        case 'sup_faq':
-            await sock.sendMessage(jid, { text: '📚 Perguntas frequentes:\n- Como funciona o suporte?\n- Quais são os horários?\n- ... (adicione suas FAQs)' });
+        case 'orc_camera':
+            await sock.sendMessage(jid, { text: '📷 Orçamento para Câmeras - Nossa equipe entrará em contato em breve.' });
             break;
-        case 'sup_chamado':
-            await sock.sendMessage(jid, { text: '📩 Abra um chamado enviando um e‑mail para suporte@empresa.com ou aguarde, em breve teremos formulário aqui.' });
+        case 'orc_alarme':
+            await sock.sendMessage(jid, { text: '🚨 Orçamento para Alarme - Nossa equipe entrará em contato em breve.' });
             break;
-
-        // Sub‑menu Instalação
-        case 'ins_motor':
-            await sock.sendMessage(jid, { text: 'motor' });
+        case 'orc_interfonia':
+            await sock.sendMessage(jid, { text: '📞 Orçamento para Interfonia - Nossa equipe entrará em contato em breve.' });
             break;
-        case 'ins_manual':
-            await sock.sendMessage(jid, { text: '📖 Manuais disponíveis em: https://exemplo.com/manuais' });
+        case 'orc_cerca_eletrica':
+            await sock.sendMessage(jid, { text: '⚡ Orçamento para Cerca Elétrica - Nossa equipe entrará em contato em breve.' });
             break;
-        case 'ins_tecnico':
-            await sock.sendMessage(jid, { text: '🔧 Suporte técnico: entre em contato pelo telefone (11) 99999-9999 ou aguarde, em breve chat ao vivo.' });
+        case 'orc_paineis_solares':
+            await sock.sendMessage(jid, { text: '☀️ Orçamento para Painéis Solares - Nossa equipe entrará em contato em breve.' });
             break;
 
-        // Sub‑menu Impressões 3D
+        case 'manut_motor':
+            await sock.sendMessage(jid, { text: '🔧 *Manutenção de Motor*\nVamos iniciar o processo de agendamento.' });
+            await startManutencaoColeta(sock, jid, session, 'Motor');
+            break;
+        case 'manut_camera':
+            await sock.sendMessage(jid, { text: '📷 *Manutenção de Câmeras*\nVamos iniciar o processo de agendamento.' });
+            await startManutencaoColeta(sock, jid, session, 'Câmeras');
+            break;
+        case 'manut_alarme':
+            await sock.sendMessage(jid, { text: '🚨 *Manutenção de Alarme*\nVamos iniciar o processo de agendamento.' });
+            await startManutencaoColeta(sock, jid, session, 'Alarme');
+            break;
+        case 'manut_interfonia':
+            await sock.sendMessage(jid, { text: '📞 *Manutenção de Interfonia*\nVamos iniciar o processo de agendamento.' });
+            await startManutencaoColeta(sock, jid, session, 'Interfonia');
+            break;
+        case 'manut_cerca':
+            await sock.sendMessage(jid, { text: '⚡ *Manutenção de Cerca Elétrica*\nVamos iniciar o processo de agendamento.' });
+            await startManutencaoColeta(sock, jid, session, 'Cerca Elétrica');
+            break;
+        case 'manut_solar':
+            await sock.sendMessage(jid, { text: '☀️ *Manutenção de Painéis Solares*\nVamos iniciar o processo de agendamento.' });
+            await startManutencaoColeta(sock, jid, session, 'Painéis Solares');
+            break;
+
+        case 'admin_fatura':
+            await sock.sendMessage(jid, { text: '📄 Para solicitar uma segunda via de fatura ou NF, informe seu CPF/CNPJ.' });
+            break;
+        case 'admin_pagamento':
+            await sock.sendMessage(jid, { text: '💳 Aceitamos cartão de crédito/débito, PIX, boleto bancário e transferência.' });
+            break;
+        case 'admin_suporte':
+            await sock.sendMessage(jid, { text: '👨‍💼 Em breve um especialista do financeiro entrará em contato.' });
+            break;
+
         case 'imp_catalogo':
             await sock.sendMessage(jid, { text: '🖼️ Catálogo de produtos: https://exemplo.com/catalogo' });
             break;
         case 'imp_orcamento':
-            await sock.sendMessage(jid, { text: '💰 Para solicitar um orçamento, envie o arquivo 3D (STL/OBJ) e a quantidade desejada.' });
+            await sock.sendMessage(jid, { text: '💰 Para solicitar um orçamento, envie o arquivo 3D (STL/OBJ).' });
             break;
         case 'imp_consulta':
-            await sock.sendMessage(jid, { text: '🔍 Para consultar seu pedido, informe o número do pedido (ex: #12345).' });
+            await sock.sendMessage(jid, { text: '🔍 Para consultar seu pedido, informe o número do pedido.' });
             break;
         case 'imp_alterar':
-            await sock.sendMessage(jid, { text: '✏️ Para alterar um pedido, informe o número do pedido e a nova especificação.' });
+            await sock.sendMessage(jid, { text: '✏️ Para alterar um pedido, informe o número do pedido.' });
             break;
 
-        // Voltar ao menu principal
+        case 'outros_duvidas':
+            await sock.sendMessage(jid, { text: '❓ Envie sua dúvida e responderemos o mais breve possível.' });
+            break;
+        case 'outros_parceria':
+            await sock.sendMessage(jid, { text: '🤝 Para parcerias, envie um e-mail para parcerias@empresa.com' });
+            break;
+        case 'outros_falar_atendente':
+            await sock.sendMessage(jid, { text: '💬 Em breve um atendente estará disponível para conversar.' });
+            break;
+
         case 'voltar_menu':
             session.state = 'main_menu';
             await sendMainMenu(sock, jid);
             break;
 
         default:
-            await sock.sendMessage(jid, { text: 'Opção não reconhecida. Digite "menu" para recomeçar.' });
+            await sock.sendMessage(jid, { text: '❓ Opção não reconhecida. Digite "menu" para recomeçar.' });
             session.state = 'main_menu';
+            await sendMainMenu(sock, jid);
             break;
     }
 }
 
-// -------------------- SETUP DO SOCKET (um único número) --------------------
+// -------------------- SETUP DO SOCKET --------------------
 
 async function createSocket() {
     const { state, saveCreds } = await useMultiFileAuthState('auth');
@@ -424,6 +487,7 @@ async function createSocket() {
     const sock = makeWASocket({
         auth: state,
         emitOwnEvents: false,
+        printQRInTerminal: true,
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -432,7 +496,7 @@ async function createSocket() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log('Scan this QR with WhatsApp:');
+            console.log('📱 Escaneie este QR Code com o WhatsApp:');
             qrcode.generate(qr, { small: true });
         }
 
@@ -442,13 +506,13 @@ async function createSocket() {
                 DisconnectReason.loggedOut;
 
             if (shouldReconnect) {
-                console.log('Connection closed, reconnecting…');
+                console.log('🔄 Conexão fechada, reconectando…');
                 startBot();
             } else {
-                console.log('Connection closed. You are logged out.');
+                console.log('❌ Conexão fechada. Você foi desconectado.');
             }
         } else if (connection === 'open') {
-            console.log('✅ WhatsApp connected');
+            console.log('✅ WhatsApp conectado com sucesso!');
         }
     });
 
@@ -462,7 +526,6 @@ async function createSocket() {
 
         const msg = unwrapMessage(m.message);
 
-        // Texto
         const rawText =
             msg.conversation ||
             msg.extendedTextMessage?.text ||
@@ -475,7 +538,6 @@ async function createSocket() {
             await handleTextCommand({ sock, jid, text });
         }
 
-        // Template button click
         const tpl = msg.templateButtonReplyMessage;
         if (tpl) {
             const button = {
@@ -494,7 +556,7 @@ async function createSocket() {
 
 async function startBot() {
     const sock = await createSocket();
-    // Não precisa registrar handlers separadamente, já estão no socket
+    console.log('🤖 Bot iniciado! Aguardando mensagens...');
 }
 
 startBot().catch(console.error);
