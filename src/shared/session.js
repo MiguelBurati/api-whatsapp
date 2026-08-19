@@ -1,4 +1,3 @@
-// src/session.js
 const userSession = new Map();
 
 function getSession(userJid) {
@@ -9,11 +8,13 @@ function getSession(userJid) {
             step: 0,
             perguntas: [],
             greeted: false,
+            fluxo_atual: null,
             manutencao_tipo: null,
+            orcamento_tipo: null,
             aguardando_botao_horario: false
         });
     }
     return userSession.get(userJid);
 }
 
-module.exports = { getSession };
+module.exports = { userSession, getSession };

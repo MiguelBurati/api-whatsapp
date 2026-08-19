@@ -1,31 +1,101 @@
-// src/index.js
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    Browsers
-} = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const P = require('pino');
 const fs = require('fs').promises;
+const { unwrapMessage } = require('./shared/utils');
+const { getSession } = require('./shared/session');
+const { sendMainMenu } = require('./shared/menu');
+const { handleColetaResposta: handleGenericColetaResposta } = require('./shared/coletaHandler');
+const manutencaoHandlers = require('./manutencao/handlers');
+const { sendOrcamentoMenu } = require('./orcamento/menu');
+const { startOrcamentoColeta, finalizarColetaOrcamento } = require('./orcamento/coleta');
+const { sendManutencaoMenu } = require('./manutencao/menu');
+const { startManutencaoColeta, finalizarColetaManutencao } = require('./manutencao/coleta');
+const { sendAdministracaoMenu } = require('./administracao/menu');
+const { sendImpressoesMenu } = require('./impressoes3d/menu');
+const { sendOutrosMenu } = require('./outros/menu');
 
-const { unwrapMessage } = require('./utils');
-const { handleTextCommand, handleButtonClick } = require('./handlers');
+const ORCAMENTO_TYPES = {
+    orc_motor: 'Motor', orc_camera: 'Câmera', orc_alarme: 'Alarme',
+    orc_interfonia: 'Interfonia', orc_cerca_eletrica: 'Cerca Elétrica', orc_paineis_solares: 'Painéis Solares'
+};
+const MANUTENCAO_TYPES = {
+    manut_motor: ['Motor', '🔧 *Manutenção de Motor*'], manut_camera: ['Câmeras', '📷 *Manutenção de Câmeras*'],
+    manut_alarme: ['Alarme', '🚨 *Manutenção de Alarme*'], manut_interfonia: ['Interfonia', '📞 *Manutenção de Interfonia*'],
+    manut_cerca: ['Cerca Elétrica', '⚡ *Manutenção de Cerca Elétrica*'], manut_solar: ['Painéis Solares', '☀️ *Manutenção de Painéis Solares*']
+};
+
+async function handleTextCommand({ sock, jid, text }) {
+    const session = getSession(jid);
+    if (session.state === 'coleta_dados') {
+        const finalizarColeta = session.fluxo_atual === 'orcamento' ? finalizarColetaOrcamento : finalizarColetaManutencao;
+        const handler = session.fluxo_atual === 'orcamento' ? handleGenericColetaResposta : manutencaoHandlers.handleColetaResposta;
+        await handler({ sock, jid, text, session, finalizarColeta });
+        return;
+    }
+    if (!session.greeted) {
+        session.greeted = true;
+        session.state = 'main_menu';
+        await sendMainMenu(sock, jid);
+        return;
+    }
+    const lower = text.toLowerCase();
+    if (lower === 'ajuda' || lower === 'menu') {
+        session.state = 'main_menu';
+        await sendMainMenu(sock, jid);
+    } else if (lower === 'cancelar') {
+        await sock.sendMessage(jid, { text: '❌ Operação cancelada. Digite "menu" para recomeçar.' });
+        session.state = 'main_menu';
+        session.fluxo_atual = null;
+        session.data = {};
+        session.step = 0;
+        session.perguntas = [];
+    } else {
+        await sock.sendMessage(jid, { text: '❓ Não entendi. Digite "ajuda" para ver as opções ou "menu" para voltar.' });
+    }
+}
+
+async function handleButtonClick({ sock, jid, button }) {
+    const session = getSession(jid);
+    const { id, label } = button;
+    console.log(`Botão clicado: ${id} (${label})`);
+    if (session.fluxo_atual === 'manutencao' && await manutencaoHandlers.handleButtonClick({ sock, jid, button, session })) return;
+    if (ORCAMENTO_TYPES[id]) {
+        await sock.sendMessage(jid, { text: `💰 *Orçamento de ${ORCAMENTO_TYPES[id]}*\nVamos iniciar a coleta de dados.` });
+        await startOrcamentoColeta(sock, jid, session, ORCAMENTO_TYPES[id]);
+        return;
+    }
+    if (MANUTENCAO_TYPES[id]) {
+        const [tipo, mensagem] = MANUTENCAO_TYPES[id];
+        await sock.sendMessage(jid, { text: `${mensagem}\nVamos iniciar o processo de agendamento.` });
+        await startManutencaoColeta(sock, jid, session, tipo);
+        return;
+    }
+    switch (id) {
+        case 'menu_orcamento': await sendOrcamentoMenu(sock, jid); break;
+        case 'menu_manutencao': await sendManutencaoMenu(sock, jid); break;
+        case 'menu_administracao': await sendAdministracaoMenu(sock, jid); break;
+        case 'menu_impressoes3d': await sendImpressoesMenu(sock, jid); break;
+        case 'menu_outros': await sendOutrosMenu(sock, jid); break;
+        case 'voltar_menu': session.state = 'main_menu'; session.fluxo_atual = null; await sendMainMenu(sock, jid); break;
+        default:
+            await sock.sendMessage(jid, { text: '❓ Opção não reconhecida. Digite "menu" para recomeçar.' });
+            session.state = 'main_menu';
+            await sendMainMenu(sock, jid);
+    }
+}
 
 async function createSocket() {
     const authFolder = 'auth';
-
-    let state, saveCreds;
+    let state;
+    let saveCreds;
     try {
-        const auth = await useMultiFileAuthState(authFolder);
-        state = auth.state;
-        saveCreds = auth.saveCreds;
+        ({ state, saveCreds } = await useMultiFileAuthState(authFolder));
     } catch (err) {
         console.error('❌ Erro ao carregar credenciais:', err.message);
         await fs.rm(authFolder, { recursive: true, force: true });
         return createSocket();
     }
-
     const sock = makeWASocket({
         auth: state,
         browser: Browsers.macOS('Desktop'),
@@ -38,82 +108,56 @@ async function createSocket() {
         fireInitQueries: true,
         generateHighQualityLinkPreview: true,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
+        markOnlineOnConnect: true
     });
-
     sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            console.log('📱 Escaneie este QR Code:');
-            qrcode.generate(qr, { small: true });
-            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
-            console.log('Ou acesse:', qrUrl);
-        }
-
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+        if (qr) { console.log('📱 Escaneie este QR Code:'); qrcode.generate(qr, { small: true }); }
         if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            if (statusCode === DisconnectReason.loggedOut) {
-                console.log('❌ Logout. Deletando credenciais...');
+            if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
                 await fs.rm(authFolder, { recursive: true, force: true });
-                console.log('🔄 Reinicie o bot.');
+                console.log('❌ Logout. Reinicie o bot.');
                 process.exit(0);
-            } else {
-                console.log('🔄 Reconectando em 5s...');
-                setTimeout(() => startBot(), 5000);
             }
-        } else if (connection === 'open') {
-            console.log('✅ WhatsApp conectado!');
-        }
+            console.log('🔄 Reconectando em 5s...');
+            setTimeout(() => startBot(), 5000);
+        } else if (connection === 'open') console.log('✅ WhatsApp conectado!');
     });
-
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
-        const m = messages[0];
-        if (!m || !m.message) return;
-
-        const jid = m.key.remoteJid;
-        if (m.key.fromMe || jid === 'status@broadcast') return;
-
-        const msg = unwrapMessage(m.message);
-
-        const rawText =
-            msg.conversation ||
-            msg.extendedTextMessage?.text ||
-            msg.imageMessage?.caption ||
-            msg.videoMessage?.caption ||
-            '';
-        const text = rawText.trim();
-
-        if (text) {
-            await handleTextCommand({ sock, jid, text });
+        const message = messages[0];
+        if (!message?.message || message.key.fromMe || message.key.remoteJid === 'status@broadcast') return;
+        const jid = message.key.remoteJid;
+        const msg = unwrapMessage(message.message);
+        const text = (msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '').trim();
+        if (text) await handleTextCommand({ sock, jid, text });
+        const template = msg.templateButtonReplyMessage;
+        if (template) {
+            await handleButtonClick({ sock, jid, button: { id: template.selectedId, label: template.selectedDisplayText, raw: template } });
+            return;
         }
-
-        const tpl = msg.templateButtonReplyMessage;
-        if (tpl) {
-            const button = {
-                id: tpl.selectedId,
-                label: tpl.selectedDisplayText,
-                raw: tpl,
-            };
-            await handleButtonClick({ sock, jid, button });
+        const legacyButton = msg.buttonsResponseMessage;
+        if (legacyButton) {
+            await handleButtonClick({ sock, jid, button: { id: legacyButton.selectedButtonId, label: legacyButton.selectedDisplayText, raw: legacyButton } });
+            return;
+        }
+        const nativeFlow = msg.interactiveResponseMessage?.nativeFlowResponseMessage;
+        if (nativeFlow?.paramsJson) {
+            try {
+                const params = JSON.parse(nativeFlow.paramsJson);
+                const id = params.id || params.button_id || params.buttonId;
+                if (id) await handleButtonClick({ sock, jid, button: { id, label: params.display_text, raw: nativeFlow } });
+            } catch (err) {
+                console.error('❌ Resposta de botão inválida:', err.message);
+            }
         }
     });
-
     return sock;
 }
 
 async function startBot() {
-    try {
-        const sock = await createSocket();
-        console.log('🤖 Bot iniciado!');
-    } catch (err) {
-        console.error('❌ Erro fatal:', err);
-        await fs.rm('auth', { recursive: true, force: true });
-        startBot();
-    }
+    try { await createSocket(); console.log('🤖 Bot iniciado!'); }
+    catch (err) { console.error('❌ Erro fatal:', err); await fs.rm('auth', { recursive: true, force: true }); startBot(); }
 }
 
-module.exports = { startBot };
+module.exports = { createSocket, handleTextCommand, handleButtonClick, startBot };
