@@ -60,6 +60,16 @@ async function handleButtonClick({ sock, jid, button }) {
     const { id, label } = button;
     console.log(`Botão clicado: ${id} (${label})`);
     if (session.fluxo_atual === 'manutencao' && await manutencaoHandlers.handleButtonClick({ sock, jid, button, session })) return;
+    if (session.fluxo_atual === 'orcamento' && session.state === 'coleta_dados' && session.aguardando_botao_horario) {
+        await handleGenericColetaResposta({
+            sock,
+            jid,
+            text: id || label,
+            session,
+            finalizarColeta: finalizarColetaOrcamento
+        });
+        return;
+    }
     if (ORCAMENTO_TYPES[id]) {
         await sock.sendMessage(jid, { text: `💰 *Orçamento de ${ORCAMENTO_TYPES[id]}*\nVamos iniciar a coleta de dados.` });
         await startOrcamentoColeta(sock, jid, session, ORCAMENTO_TYPES[id]);

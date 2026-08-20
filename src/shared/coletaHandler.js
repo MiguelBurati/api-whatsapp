@@ -6,17 +6,21 @@ async function handleColetaResposta({ sock, jid, text, session, finalizarColeta 
 
     if (session.aguardando_botao_horario) {
         const perguntaAtual = perguntas[step];
+        const opcaoSelecionada = perguntaAtual.opcoes?.find((opcao) => opcao.id === text);
+        const valorResposta = opcaoSelecionada?.valor || text;
         const validacao = perguntaAtual.validacao;
-        if (validacao && !validacao(text)) {
+        if (validacao && !validacao(valorResposta)) {
             await sock.sendMessage(jid, { text: '❌ Resposta inválida. Por favor, responda novamente.' });
             await sock.sendMessage(jid, { text: perguntaAtual.pergunta });
             return;
         }
-        session.data[perguntaAtual.campo] = text.trim();
+        session.data[perguntaAtual.campo] = valorResposta.trim();
         session.step++;
         session.aguardando_botao_horario = false;
         if (session.step >= perguntas.length) {
             await finalizarColeta(sock, jid, session);
+        } else if (perguntas[session.step].botoes) {
+            await handleColetaResposta({ sock, jid, text: '', session, finalizarColeta });
         } else {
             await sock.sendMessage(jid, { text: perguntas[session.step].pergunta });
         }
