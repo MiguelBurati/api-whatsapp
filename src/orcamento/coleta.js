@@ -1,4 +1,4 @@
-const { sendMainMenu } = require('../shared/menu');
+const { sendMainMenu, sendMenuFinal } = require('../shared/menu');
 
 const perguntasPadraoOrcamento = [
     {
@@ -69,6 +69,13 @@ const perguntasPorTipo = {
                 { id: 'nao', text: 'Não', valor: 'não' }
             ]
         }
+    ],
+    painel_solar: [
+        {
+            pergunta: 'Envie um demonstrativo de consumo dos últimos 12 meses.',
+            campo: 'demonstrativo_consumo',
+            validacao: (valor) => valor.trim().length > 0
+        }
     ]
 };
 
@@ -126,30 +133,47 @@ async function startOrcamentoColeta(sock, jid, session, tipo) {
 async function finalizarColetaOrcamento(sock, jid, session) {
     const data = session.data;
     const tipo = session.orcamento_tipo || 'Não especificado';
+    const horarioMap = { manhã: '🌅 Parte da manhã', manha: '🌅 Parte da manhã', tarde: '🌇 Parte da tarde' };
+    const horario = horarioMap[(data.horario || '').toLowerCase()] || data.horario || 'Não informado';
+
+    const labelsPorCampo = {
+        nome: { emoji: '👤', label: '*Nome*' },
+        tipo_motor: { emoji: '🔧', label: '*Tipo de motor*' },
+        medidas: { emoji: '📏', label: '*Medidas do portão*' },
+        quantidade_cameras: { emoji: '📷', label: '*Quantidade de câmeras*' },
+        ambiente: { emoji: '🏢', label: '*Ambiente*' },
+        alcance_internet: { emoji: '📶', label: '*Alcance de internet*' },
+        demonstrativo_consumo: { emoji: '📄', label: '*Demonstrativo de consumo*' },
+        endereco: { emoji: '🏠', label: '*Endereço*' }
+    };
 
     let resumo = '💰 *ORDEM DE SERVIÇO - ORÇAMENTO*\n\n';
     resumo += `📋 *Tipo:* ${tipo}\n`;
 
-    // Adiciona todos os campos coletados, exceto 'tipo_orcamento' (já mostrado)
     for (const [campo, valor] of Object.entries(data)) {
-        if (campo !== 'tipo_orcamento' && valor) {
-            const label = campo.replace('_', ' ').toUpperCase();
-            resumo += `${label}: ${valor}\n`;
-        }
+        if (!valor || campo === 'tipo_orcamento' || campo === 'horario') continue;
+
+        const campoFormatado = labelsPorCampo[campo] || {
+            emoji: '📌',
+            label: `*${campo.replace(/_/g, ' ').replace(/\b\w/g, (letra) => letra.toUpperCase())}*`
+        };
+
+        resumo += `${campoFormatado.emoji} ${campoFormatado.label}: ${valor}\n`;
     }
 
-    resumo += '\n✅ *Em breve entraremos em contato para preparar seu orçamento*';
+    resumo += `🕐 *Horário preferencial:* ${horario}\n\n`;
+    resumo += '✅ *Em breve entraremos em contato para preparar seu orçamento*';
 
     await sock.sendMessage(jid, { text: resumo });
 
-    // Limpa a sessão e volta ao menu principal
     session.state = 'main_menu';
     session.fluxo_atual = null;
     session.data = {};
     session.step = 0;
     session.perguntas = [];
     session.orcamento_tipo = null;
-    await sendMainMenu(sock, jid);
+    session.aguardando_botao_horario = false;
+    await sendMenuFinal(sock, jid);
 }
 
 module.exports = { startOrcamentoColeta, finalizarColetaOrcamento };
