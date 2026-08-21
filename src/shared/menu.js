@@ -15,4 +15,15 @@ async function sendMainMenu(sock, jid) {
     });
 }
 
-module.exports = { sendMainMenu };
+async function sendMenuFinal(sock, jid) {
+    await sendButtons(sock, jid, {
+        title: 'Obrigado pelo seu contato!',
+        text: 'O que deseja fazer agora?',
+        buttons: [
+            { id: 'menu_principal', text: '↩️ Voltar ao menu principal' },
+            { id: 'menu_sair', text: '❌ Encerrar atendimento' }
+        ]
+    });
+}
+
+module.exports = { sendMainMenu, sendMenuFinal };

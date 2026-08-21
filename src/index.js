@@ -60,6 +60,16 @@ async function handleButtonClick({ sock, jid, button }) {
     const { id, label } = button;
     console.log(`Botão clicado: ${id} (${label})`);
     if (session.fluxo_atual === 'manutencao' && await manutencaoHandlers.handleButtonClick({ sock, jid, button, session })) return;
+    if (session.fluxo_atual === 'orcamento' && session.state === 'coleta_dados' && session.aguardando_botao_horario) {
+        await handleGenericColetaResposta({
+            sock,
+            jid,
+            text: id || label,
+            session,
+            finalizarColeta: finalizarColetaOrcamento
+        });
+        return;
+    }
     if (ORCAMENTO_TYPES[id]) {
         await sock.sendMessage(jid, { text: `💰 *Orçamento de ${ORCAMENTO_TYPES[id]}*\nVamos iniciar a coleta de dados.` });
         await startOrcamentoColeta(sock, jid, session, ORCAMENTO_TYPES[id]);
@@ -77,6 +87,24 @@ async function handleButtonClick({ sock, jid, button }) {
         case 'menu_administracao': await sendAdministracaoMenu(sock, jid); break;
         case 'menu_impressoes3d': await sendImpressoesMenu(sock, jid); break;
         case 'menu_outros': await sendOutrosMenu(sock, jid); break;
+        case 'menu_principal':
+            session.state = 'main_menu';
+            session.fluxo_atual = null;
+            session.data = {};
+            session.step = 0;
+            session.perguntas = [];
+            session.aguardando_botao_horario = false;
+            await sendMainMenu(sock, jid);
+            break;
+        case 'menu_sair':
+            session.state = 'main_menu';
+            session.fluxo_atual = null;
+            session.data = {};
+            session.step = 0;
+            session.perguntas = [];
+            session.aguardando_botao_horario = false;
+            await sock.sendMessage(jid, { text: '✅ Atendimento encerrado. Digite "menu" para iniciar outro atendimento.' });
+            break;
         case 'voltar_menu': session.state = 'main_menu'; session.fluxo_atual = null; await sendMainMenu(sock, jid); break;
         default:
             await sock.sendMessage(jid, { text: '❓ Opção não reconhecida. Digite "menu" para recomeçar.' });

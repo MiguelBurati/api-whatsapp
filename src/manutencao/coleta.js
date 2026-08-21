@@ -1,4 +1,4 @@
-const { sendMainMenu } = require('../shared/menu');
+const { sendMainMenu, sendMenuFinal } = require('../shared/menu');
 
 async function startManutencaoColeta(sock, jid, session, tipo) {
     session.state = 'coleta_dados';
@@ -49,7 +49,7 @@ async function finalizarColetaManutencao(sock, jid, session) {
     session.perguntas = [];
     session.manutencao_tipo = null;
     session.aguardando_botao_horario = false;
-    await sendMainMenu(sock, jid);
+    await sendMenuFinal(sock, jid);
 }
 
 module.exports = { startManutencaoColeta, finalizarColetaManutencao };
