@@ -14,6 +14,7 @@ const { startManutencaoColeta, finalizarColetaManutencao } = require('./manutenc
 const { sendAdministracaoMenu } = require('./administracao/menu');
 const { sendImpressoesMenu } = require('./impressoes3d/menu');
 const { sendOutrosMenu } = require('./outros/menu');
+const { isBlacklisted } = require('./shared/blacklist');
 
 const ORCAMENTO_TYPES = {
     orc_motor: 'Motor', orc_camera: 'Câmera', orc_alarme: 'Alarme',
@@ -156,6 +157,8 @@ async function createSocket() {
         const message = messages[0];
         if (!message?.message || message.key.fromMe || message.key.remoteJid === 'status@broadcast') return;
         const jid = message.key.remoteJid;
+        const { participant, remoteJidAlt, participantAlt, senderPn, participantPn } = message.key;
+        if (isBlacklisted(jid, participant, remoteJidAlt, participantAlt, senderPn, participantPn)) return;
         const msg = unwrapMessage(message.message);
         const text = (msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '').trim();
         if (text) await handleTextCommand({ sock, jid, text });
