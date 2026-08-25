@@ -45,19 +45,43 @@ const perguntasPorTipo = {
     ],
     camera: [
         {
-            pergunta: 'Quantas câmeras deseja instalar?',
-            campo: 'quantidade_cameras',
-            validacao: (valor) => !isNaN(parseInt(valor)) && parseInt(valor) > 0
-        }, 
-        {
             pergunta: 'Será em ambiente interno ou externo?',
             campo: 'ambiente',
-            validacao: (valor) => ['interno', 'externo'].includes(valor.toLowerCase()),
+            validacao: (valor) => ['interno', 'externo', 'ambos'].includes(valor.toLowerCase()),
             botoes: true,
             opcoes: [
                 { id: 'interno', text: 'Interno' },
-                { id: 'externo', text: 'Externo' }
-            ]
+                { id: 'externo', text: 'Externo' },
+                { id: 'ambos', text: 'Ambos' }
+            ],
+            perguntasExtras: {
+                interno: [
+                    {
+                        pergunta: 'Quantas câmeras deseja instalar?',
+                        campo: 'quantidade_cameras',
+                        validacao: (valor) => !isNaN(parseInt(valor)) && parseInt(valor) > 0
+                    }
+                ],
+                externo: [
+                    {
+                        pergunta: 'Quantas câmeras deseja instalar?',
+                        campo: 'quantidade_cameras',
+                        validacao: (valor) => !isNaN(parseInt(valor)) && parseInt(valor) > 0
+                    }
+                ],
+                ambos: [
+                    {
+                        pergunta: 'Quantas na área externa?',
+                        campo: 'quantidade_cameras_externa',
+                        validacao: (valor) => !isNaN(parseInt(valor)) && parseInt(valor) >= 0
+                    },
+                    {
+                        pergunta: 'Quantas na área interna?',
+                        campo: 'quantidade_cameras_interna',
+                        validacao: (valor) => !isNaN(parseInt(valor)) && parseInt(valor) >= 0
+                    }
+                ]
+            }
         },
         {
             pergunta: 'No local da instalação, há alcance de internet?',
@@ -141,6 +165,8 @@ async function finalizarColetaOrcamento(sock, jid, session) {
         tipo_motor: { emoji: '🔧', label: '*Tipo de motor*' },
         medidas: { emoji: '📏', label: '*Medidas do portão*' },
         quantidade_cameras: { emoji: '📷', label: '*Quantidade de câmeras*' },
+        quantidade_cameras_externa: { emoji: '🌳', label: '*Câmeras na área externa*' },
+        quantidade_cameras_interna: { emoji: '🏠', label: '*Câmeras na área interna*' },
         ambiente: { emoji: '🏢', label: '*Ambiente*' },
         alcance_internet: { emoji: '📶', label: '*Alcance de internet*' },
         demonstrativo_consumo: { emoji: '📄', label: '*Demonstrativo de consumo*' },
@@ -151,7 +177,12 @@ async function finalizarColetaOrcamento(sock, jid, session) {
     resumo += `📋 *Tipo:* ${tipo}\n`;
 
     for (const [campo, valor] of Object.entries(data)) {
-        if (!valor || campo === 'tipo_orcamento' || campo === 'horario') continue;
+        if (
+            !valor ||
+            campo === 'tipo_orcamento' ||
+            campo === 'horario' ||
+            (data.ambiente === 'ambos' && campo === 'quantidade_cameras')
+        ) continue;
 
         const campoFormatado = labelsPorCampo[campo] || {
             emoji: '📌',

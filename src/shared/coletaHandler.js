@@ -16,6 +16,8 @@ async function handleColetaResposta({ sock, jid, text, session, finalizarColeta 
         }
         session.data[perguntaAtual.campo] = valorResposta.trim();
         session.step++;
+        const perguntasExtras = perguntaAtual.perguntasExtras?.[valorResposta.trim().toLowerCase()];
+        if (perguntasExtras?.length) session.perguntas.splice(session.step, 0, ...perguntasExtras);
         session.aguardando_botao_horario = false;
         if (session.step >= perguntas.length) {
             await finalizarColeta(sock, jid, session);
