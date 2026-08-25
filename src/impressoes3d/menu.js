@@ -5,10 +5,14 @@ async function sendImpressoesMenu(sock, jid) {
         title: '🖨️ Impressões 3D',
         text: 'Selecione uma ação:',
         buttons: [
-            { id: 'imp_catalogo', text: '🖼️ Ver catálogo' },
+            {
+                name: 'cta_url',
+                buttonParamsJson: JSON.stringify({
+                    display_text: '🖼️ Ver catálogo',
+                    url: 'https://loja.menu/s3dimpressoespersonalizadas'
+                })
+            },
             { id: 'imp_orcamento', text: '💰 Solicitar orçamento' },
-            { id: 'imp_consulta', text: '🔍 Consultar pedido' },
-            { id: 'imp_alterar', text: '✏️ Alterar pedido' },
             { id: 'voltar_menu', text: '🔙 Voltar' }
         ]
     });

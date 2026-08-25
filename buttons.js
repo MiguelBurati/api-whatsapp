@@ -724,6 +724,8 @@ async function sendInteractiveMessage(sock, jid, content, options = {}) {
   }
 
   // Step 5: Relay with injected nodes.
+  sock.__botMessageIds ||= new Set();
+  sock.__botMessageIds.add(fullMsg.key.id);
   await relayMessage(jid, fullMsg.message, {
     messageId: fullMsg.key.id,
     useCachedGroupMetadata: options.useCachedGroupMetadata,

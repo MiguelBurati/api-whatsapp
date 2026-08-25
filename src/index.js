@@ -3,8 +3,14 @@ const qrcode = require('qrcode-terminal');
 const P = require('pino');
 const fs = require('fs').promises;
 const { unwrapMessage } = require('./shared/utils');
-const { getSession } = require('./shared/session');
+const {
+    getSession,
+    pausarParaAtendimento,
+    atendimentoPausado,
+    limparPausa
+} = require('./shared/session');
 const { sendMainMenu } = require('./shared/menu');
+const { sendButtons } = require('../buttons');
 const { handleColetaResposta: handleGenericColetaResposta } = require('./shared/coletaHandler');
 const manutencaoHandlers = require('./manutencao/handlers');
 const { sendOrcamentoMenu } = require('./orcamento/menu');
@@ -13,7 +19,6 @@ const { sendManutencaoMenu } = require('./manutencao/menu');
 const { startManutencaoColeta, finalizarColetaManutencao } = require('./manutencao/coleta');
 const { sendAdministracaoMenu } = require('./administracao/menu');
 const { sendImpressoesMenu } = require('./impressoes3d/menu');
-const { sendOutrosMenu } = require('./outros/menu');
 const { isBlacklisted } = require('./shared/blacklist');
 
 const ORCAMENTO_TYPES = {
@@ -26,8 +31,82 @@ const MANUTENCAO_TYPES = {
     manut_cerca: ['Cerca Elétrica', '⚡ *Manutenção de Cerca Elétrica*'], manut_solar: ['Painéis Solares', '☀️ *Manutenção de Painéis Solares*']
 };
 
+const ATTENDANT_CHOICE_BUTTONS = [
+    { id: 'atendimento_retomar', text: '1️⃣ Retomar conversa anterior' },
+    { id: 'atendimento_novo', text: '2️⃣ Iniciar novo atendimento' }
+];
+
+async function sendAttendantChoices(sock, jid) {
+    await sendButtons(sock, jid, {
+        text: 'Como deseja continuar?',
+        buttons: ATTENDANT_CHOICE_BUTTONS
+    });
+}
+
+async function handleAttendantState({ sock, jid, value }) {
+    const session = getSession(jid);
+    const normalized = String(value || '').trim().toLowerCase();
+
+    if (session.aguardandoEscolhaAtendimento) {
+        if (['atendimento_retomar', '1', '#1', '1️⃣ retomar conversa anterior'].includes(normalized)) {
+            pausarParaAtendimento(session);
+            await sock.sendMessage(jid, { text: 'Certo! Aguarde um de nossos atendentes retornar.' });
+            return true;
+        }
+        if (['atendimento_novo', '2', '#2', '2️⃣ iniciar novo atendimento'].includes(normalized)) {
+            limparPausa(session);
+            session.greeted = true;
+            session.state = 'main_menu';
+            session.fluxo_atual = null;
+            session.data = {};
+            session.step = 0;
+            session.perguntas = [];
+            session.aguardando_botao_horario = false;
+            await sendMainMenu(sock, jid);
+            return true;
+        }
+        await sendAttendantChoices(sock, jid);
+        return true;
+    }
+
+    if (atendimentoPausado(session)) return true;
+
+    if (session.greeted && session.pausadoAte > 0) {
+        session.aguardandoEscolhaAtendimento = true;
+        await sendAttendantChoices(sock, jid);
+        return true;
+    }
+
+    return false;
+}
+
+function registerAttendantMessage(sock, jid, messageId) {
+    sock.__botMessageIds ||= new Set();
+    if (sock.__botMessageIds.delete(messageId) || sock.__botSendInProgress > 0) return false;
+    const session = getSession(jid);
+    session.greeted = true;
+    pausarParaAtendimento(session);
+    return true;
+}
+
+async function encerrarAtendimento(sock, jid, session) {
+    session.state = 'main_menu';
+    session.fluxo_atual = null;
+    session.data = {};
+    session.step = 0;
+    session.perguntas = [];
+    session.aguardando_botao_horario = false;
+    limparPausa(session);
+    await sock.sendMessage(jid, { text: '✅ Atendimento encerrado. Digite "menu" para iniciar outro atendimento.' });
+}
+
 async function handleTextCommand({ sock, jid, text }) {
     const session = getSession(jid);
+    if (String(text || '').trim().toLowerCase() === '#sair') {
+        await encerrarAtendimento(sock, jid, session);
+        return;
+    }
+    if (await handleAttendantState({ sock, jid, value: text })) return;
     if (session.state === 'coleta_dados') {
         const finalizarColeta = session.fluxo_atual === 'orcamento' ? finalizarColetaOrcamento : finalizarColetaManutencao;
         const handler = session.fluxo_atual === 'orcamento' ? handleGenericColetaResposta : manutencaoHandlers.handleColetaResposta;
@@ -57,6 +136,7 @@ async function handleTextCommand({ sock, jid, text }) {
 }
 
 async function handleButtonClick({ sock, jid, button }) {
+    if (await handleAttendantState({ sock, jid, value: button.id || button.label })) return;
     const session = getSession(jid);
     const { id, label } = button;
     console.log(`Botão clicado: ${id} (${label})`);
@@ -86,8 +166,19 @@ async function handleButtonClick({ sock, jid, button }) {
         case 'menu_orcamento': await sendOrcamentoMenu(sock, jid); break;
         case 'menu_manutencao': await sendManutencaoMenu(sock, jid); break;
         case 'menu_administracao': await sendAdministracaoMenu(sock, jid); break;
+        case 'admin_suporte':
+            await sock.sendMessage(jid, { text: 'Aguarde, em breve você será atendido.' });
+            break;
         case 'menu_impressoes3d': await sendImpressoesMenu(sock, jid); break;
-        case 'menu_outros': await sendOutrosMenu(sock, jid); break;
+        case 'imp_catalogo':
+            await sock.sendMessage(jid, { text: 'https://loja.menu/s3dimpressoespersonalizadas' });
+            break;
+        case 'imp_orcamento':
+            await sock.sendMessage(jid, { text: 'Aguarde, em breve você será atendido.' });
+            break;
+        case 'menu_atendente':
+            await sock.sendMessage(jid, { text: 'Aguarde, em breve você será atendido.' });
+            break;
         case 'menu_principal':
             session.state = 'main_menu';
             session.fluxo_atual = null;
@@ -98,13 +189,7 @@ async function handleButtonClick({ sock, jid, button }) {
             await sendMainMenu(sock, jid);
             break;
         case 'menu_sair':
-            session.state = 'main_menu';
-            session.fluxo_atual = null;
-            session.data = {};
-            session.step = 0;
-            session.perguntas = [];
-            session.aguardando_botao_horario = false;
-            await sock.sendMessage(jid, { text: '✅ Atendimento encerrado. Digite "menu" para iniciar outro atendimento.' });
+            await encerrarAtendimento(sock, jid, session);
             break;
         case 'voltar_menu': session.state = 'main_menu'; session.fluxo_atual = null; await sendMainMenu(sock, jid); break;
         default:
@@ -129,7 +214,7 @@ async function createSocket() {
         auth: state,
         browser: Browsers.macOS('Desktop'),
         printQRInTerminal: true,
-        emitOwnEvents: false,
+        emitOwnEvents: true,
         logger: P({ level: 'silent' }),
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
@@ -139,6 +224,19 @@ async function createSocket() {
         syncFullHistory: false,
         markOnlineOnConnect: true
     });
+    sock.__botMessageIds = new Set();
+    sock.__botSendInProgress = 0;
+    const originalSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (...args) => {
+        sock.__botSendInProgress++;
+        try {
+            const result = await originalSendMessage(...args);
+            if (result?.key?.id) sock.__botMessageIds.add(result.key.id);
+            return result;
+        } finally {
+            sock.__botSendInProgress--;
+        }
+    };
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
         if (qr) { console.log('📱 Escaneie este QR Code:'); qrcode.generate(qr, { small: true }); }
@@ -155,8 +253,12 @@ async function createSocket() {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const message = messages[0];
-        if (!message?.message || message.key.fromMe || message.key.remoteJid === 'status@broadcast') return;
+        if (!message?.message || message.key.remoteJid === 'status@broadcast') return;
         const jid = message.key.remoteJid;
+        if (message.key.fromMe) {
+            registerAttendantMessage(sock, jid, message.key.id);
+            return;
+        }
         const { participant, remoteJidAlt, participantAlt, senderPn, participantPn } = message.key;
         if (isBlacklisted(jid, participant, remoteJidAlt, participantAlt, senderPn, participantPn)) return;
         const msg = unwrapMessage(message.message);
