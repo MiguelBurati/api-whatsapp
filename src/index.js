@@ -2,7 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers
 const qrcode = require('qrcode-terminal');
 const P = require('pino');
 const fs = require('fs').promises;
-const { unwrapMessage } = require('./shared/utils');
+const { unwrapMessage, getMessageText, hasMediaTrigger } = require('./shared/utils');
 const {
     getSession,
     pausarParaAtendimento,
@@ -262,8 +262,13 @@ async function createSocket() {
         const { participant, remoteJidAlt, participantAlt, senderPn, participantPn } = message.key;
         if (isBlacklisted(jid, participant, remoteJidAlt, participantAlt, senderPn, participantPn)) return;
         const msg = unwrapMessage(message.message);
-        const text = (msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '').trim();
-        if (text) await handleTextCommand({ sock, jid, text });
+        const text = getMessageText(msg);
+        const mediaTrigger = !text && hasMediaTrigger(msg);
+
+        if (text || mediaTrigger) {
+            await handleTextCommand({ sock, jid, text: text || 'menu' });
+        }
+
         const template = msg.templateButtonReplyMessage;
         if (template) {
             await handleButtonClick({ sock, jid, button: { id: template.selectedId, label: template.selectedDisplayText, raw: template } });
