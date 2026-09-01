@@ -13,4 +13,37 @@ function unwrapMessage(msg) {
     return current || msg;
 }
 
-module.exports = { unwrapMessage };
+function getMessageText(message) {
+    if (!message) return '';
+
+    const text =
+        message.conversation ||
+        message.extendedTextMessage?.text ||
+        message.imageMessage?.caption ||
+        message.videoMessage?.caption ||
+        message.documentMessage?.caption ||
+        message.audioMessage?.caption ||
+        message.stickerMessage?.caption ||
+        message.pttMessage?.caption ||
+        '';
+
+    return String(text || '').trim();
+}
+
+function hasMediaTrigger(message) {
+    if (!message) return false;
+
+    const mediaTypes = [
+        'imageMessage',
+        'videoMessage',
+        'audioMessage',
+        'documentMessage',
+        'stickerMessage',
+        'pttMessage',
+        'voiceMessage'
+    ];
+
+    return mediaTypes.some((type) => Boolean(message[type]));
+}
+
+module.exports = { unwrapMessage, getMessageText, hasMediaTrigger };
