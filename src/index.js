@@ -19,8 +19,12 @@ const { sendManutencaoMenu } = require('./manutencao/menu');
 const { startManutencaoColeta, finalizarColetaManutencao } = require('./manutencao/coleta');
 const { sendAdministracaoMenu } = require('./administracao/menu');
 const { sendImpressoesMenu } = require('./impressoes3d/menu');
-const { isBlacklisted } = require('./shared/blacklist');
+const { isBlacklisted, isAttendant } = require('./shared/blacklist');
 
+// ==================== CONFIGURAÇÕES ====================
+const ATTENDANT_PAUSE_MS = parseInt(process.env.ATTENDANT_PAUSE_MS) || 980000;
+
+// ==================== CONSTANTES ====================
 const ORCAMENTO_TYPES = {
     orc_motor: 'Motor', orc_camera: 'Câmera', orc_alarme: 'Alarme',
     orc_interfonia: 'Interfonia', orc_cerca_eletrica: 'Cerca Elétrica', orc_paineis_solares: 'Painéis Solares'
@@ -36,6 +40,89 @@ const ATTENDANT_CHOICE_BUTTONS = [
     { id: 'atendimento_novo', text: '2️⃣ Iniciar novo atendimento' }
 ];
 
+// ==================== FUNÇÕES DE DEBUG ====================
+function debugMessageProcessing(message, jid) {
+    try {
+        const key = message.key || {};
+        const sender = key.participant || key.remoteJid || 'unknown';
+        const fromMe = key.fromMe ? 'bot' : 'user';
+        const isBlocked = isAttendant(sender);
+        
+        console.log(`📨 [DEBUG] Mensagem recebida:`);
+        console.log(`  - JID: ${jid}`);
+        console.log(`  - Remetente: ${sender}`);
+        console.log(`  - Tipo: ${fromMe}`);
+        console.log(`  - É atendente: ${isBlocked ? '✅ SIM' : '❌ NÃO'}`);
+        
+        if (message.message) {
+            const msgTemp = unwrapMessage(message.message);
+            const text = getMessageText(msgTemp);
+            if (text) {
+                console.log(`  - Texto: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+            } else {
+                console.log(`  - Tipo de mensagem: ${Object.keys(msgTemp).join(', ')}`);
+            }
+        }
+    } catch (err) {
+        console.log(`❌ Erro no debug: ${err.message}`);
+    }
+}
+
+// ==================== FUNÇÕES PRINCIPAIS ====================
+
+// FUNÇÃO PARA VERIFICAR SE É MENSAGEM DO ATENDENTE
+function isMessageFromAttendant(message, jid) {
+    if (message.key.fromMe) return false;
+    
+    const senderJid = message.key.participant || message.key.remoteJid;
+    if (!senderJid) return false;
+    if (senderJid === jid) return false;
+    
+    const isBlocked = isAttendant(senderJid);
+    
+    if (isBlocked) {
+        console.log(`👤 Mensagem do atendente detectada: ${senderJid}`);
+        console.log(`   Destinatário: ${jid}`);
+        console.log(`   Remetente != Destinatário: ${senderJid !== jid}`);
+    }
+    
+    return isBlocked;
+}
+
+// ==================== PAUSA + TIMEOUT ====================
+function pausarSessaoComTimeout(sock, jid, session, opts = {}) {
+    const { silencioso = false } = opts;
+    
+    // Se já está pausado, apenas reinicia o timeout (não duplica notificação)
+    const jaPausado = atendimentoPausado(session);
+    
+    pausarParaAtendimento(session);
+    
+    // Limpa timeout anterior
+    if (session._timeoutId) {
+        clearTimeout(session._timeoutId);
+        session._timeoutId = null;
+    }
+    
+    // Configura novo timeout
+    session._timeoutId = setTimeout(() => {
+        const currentSession = getSession(jid);
+        if (currentSession && atendimentoPausado(currentSession)) {
+            limparPausa(currentSession);
+            console.log(`⏰ Timeout do atendente expirado para ${jid}`);
+            
+            sock.sendMessage(jid, { 
+                text: `⏰ O atendente não respondeu dentro do prazo de ${Math.round(ATTENDANT_PAUSE_MS / 60000)} minutos. Digite "menu" para continuar.` 
+            }).catch(() => {});
+        }
+        if (currentSession) currentSession._timeoutId = null;
+    }, ATTENDANT_PAUSE_MS);
+    
+    if (!jaPausado && !silencioso) {
+        console.log(`⏸️ Sessão pausada para atendimento humano: ${jid} (timeout ${Math.round(ATTENDANT_PAUSE_MS / 60000)}min)`);
+    }
+}
+
 async function sendAttendantChoices(sock, jid) {
     await sendButtons(sock, jid, {
         text: 'Como deseja continuar?',
@@ -43,18 +130,32 @@ async function sendAttendantChoices(sock, jid) {
     });
 }
 
-async function handleAttendantState({ sock, jid, value }) {
+async function handleAttendantState({ sock, jid, value, message }) {
     const session = getSession(jid);
+    
+    // VERIFICA SE É MENSAGEM DO ATENDENTE
+    if (message && isMessageFromAttendant(message, jid)) {
+        console.log(`👤 Mensagem do atendente ignorada para ${jid}`);
+        pausarSessaoComTimeout(sock, jid, session, { silencioso: true });
+        return true;
+    }
+
     const normalized = String(value || '').trim().toLowerCase();
 
     if (session.aguardandoEscolhaAtendimento) {
         if (['atendimento_retomar', '1', '#1', '1️⃣ retomar conversa anterior'].includes(normalized)) {
-            pausarParaAtendimento(session);
+            session.aguardandoEscolhaAtendimento = false;
+            pausarSessaoComTimeout(sock, jid, session);
             await sock.sendMessage(jid, { text: 'Certo! Aguarde um de nossos atendentes retornar.' });
             return true;
         }
         if (['atendimento_novo', '2', '#2', '2️⃣ iniciar novo atendimento'].includes(normalized)) {
+            session.aguardandoEscolhaAtendimento = false;
             limparPausa(session);
+            if (session._timeoutId) {
+                clearTimeout(session._timeoutId);
+                session._timeoutId = null;
+            }
             session.greeted = true;
             session.state = 'main_menu';
             session.fluxo_atual = null;
@@ -69,11 +170,10 @@ async function handleAttendantState({ sock, jid, value }) {
         return true;
     }
 
-    if (atendimentoPausado(session)) return true;
-
-    if (session.greeted && session.pausadoAte > 0) {
-        session.aguardandoEscolhaAtendimento = true;
-        await sendAttendantChoices(sock, jid);
+    // Se já está pausado, apenas reinicia o timeout e ignora
+    if (atendimentoPausado(session)) {
+        console.log(`⏸️ Atendimento pausado para ${jid}, reiniciando timeout`);
+        pausarSessaoComTimeout(sock, jid, session, { silencioso: true });
         return true;
     }
 
@@ -83,9 +183,11 @@ async function handleAttendantState({ sock, jid, value }) {
 function registerAttendantMessage(sock, jid, messageId) {
     sock.__botMessageIds ||= new Set();
     if (sock.__botMessageIds.delete(messageId) || sock.__botSendInProgress > 0) return false;
+    
     const session = getSession(jid);
     session.greeted = true;
-    pausarParaAtendimento(session);
+    pausarSessaoComTimeout(sock, jid, session);
+    
     return true;
 }
 
@@ -96,29 +198,48 @@ async function encerrarAtendimento(sock, jid, session) {
     session.step = 0;
     session.perguntas = [];
     session.aguardando_botao_horario = false;
+    session.aguardandoEscolhaAtendimento = false;
+    
+    if (session._timeoutId) {
+        clearTimeout(session._timeoutId);
+        session._timeoutId = null;
+    }
+    
     limparPausa(session);
     await sock.sendMessage(jid, { text: '✅ Atendimento encerrado. Digite "menu" para iniciar outro atendimento.' });
 }
 
-async function handleTextCommand({ sock, jid, text }) {
+async function handleTextCommand({ sock, jid, text, message }) {
     const session = getSession(jid);
+    
+    // Verifica mensagem do atendente
+    if (message && isMessageFromAttendant(message, jid)) {
+        console.log(`👤 Mensagem do atendente ignorada: ${jid}`);
+        pausarSessaoComTimeout(sock, jid, session, { silencioso: true });
+        return;
+    }
+    
     if (String(text || '').trim().toLowerCase() === '#sair') {
         await encerrarAtendimento(sock, jid, session);
         return;
     }
-    if (await handleAttendantState({ sock, jid, value: text })) return;
+    
+    if (await handleAttendantState({ sock, jid, value: text, message })) return;
+    
     if (session.state === 'coleta_dados') {
         const finalizarColeta = session.fluxo_atual === 'orcamento' ? finalizarColetaOrcamento : finalizarColetaManutencao;
         const handler = session.fluxo_atual === 'orcamento' ? handleGenericColetaResposta : manutencaoHandlers.handleColetaResposta;
         await handler({ sock, jid, text, session, finalizarColeta });
         return;
     }
+    
     if (!session.greeted) {
         session.greeted = true;
         session.state = 'main_menu';
         await sendMainMenu(sock, jid);
         return;
     }
+    
     const lower = text.toLowerCase();
     if (lower === 'ajuda' || lower === 'menu') {
         session.state = 'main_menu';
@@ -131,16 +252,30 @@ async function handleTextCommand({ sock, jid, text }) {
         session.step = 0;
         session.perguntas = [];
     } else {
-        await sock.sendMessage(jid, { text: '❓ Não entendi. Digite "ajuda" para ver as opções ou "menu" para voltar.' });
+        // 🔥 CORREÇÃO: mensagem desconhecida → inicia atendimento humano (pausa + timeout)
+        console.log(`👤 Usuário solicitou atendimento humano (mensagem livre): ${jid}`);
+        await sendAttendantChoices(sock, jid);
+        session.aguardandoEscolhaAtendimento = true;
     }
 }
 
-async function handleButtonClick({ sock, jid, button }) {
-    if (await handleAttendantState({ sock, jid, value: button.id || button.label })) return;
+async function handleButtonClick({ sock, jid, button, message }) {
+    // Verifica se é mensagem do atendente
+    if (message && isMessageFromAttendant(message, jid)) {
+        console.log(`👤 Botão do atendente ignorado: ${jid}`);
+        const session = getSession(jid);
+        pausarSessaoComTimeout(sock, jid, session, { silencioso: true });
+        return;
+    }
+    
+    if (await handleAttendantState({ sock, jid, value: button.id || button.label, message })) return;
+    
     const session = getSession(jid);
     const { id, label } = button;
     console.log(`Botão clicado: ${id} (${label})`);
+    
     if (session.fluxo_atual === 'manutencao' && await manutencaoHandlers.handleButtonClick({ sock, jid, button, session })) return;
+    
     if (session.fluxo_atual === 'orcamento' && session.state === 'coleta_dados' && session.aguardando_botao_horario) {
         await handleGenericColetaResposta({
             sock,
@@ -151,23 +286,28 @@ async function handleButtonClick({ sock, jid, button }) {
         });
         return;
     }
+    
     if (ORCAMENTO_TYPES[id]) {
         await sock.sendMessage(jid, { text: `💰 *Orçamento de ${ORCAMENTO_TYPES[id]}*\nVamos iniciar a coleta de dados.` });
         await startOrcamentoColeta(sock, jid, session, ORCAMENTO_TYPES[id]);
         return;
     }
+    
     if (MANUTENCAO_TYPES[id]) {
         const [tipo, mensagem] = MANUTENCAO_TYPES[id];
         await sock.sendMessage(jid, { text: `${mensagem}\nVamos iniciar o processo de agendamento.` });
         await startManutencaoColeta(sock, jid, session, tipo);
         return;
     }
+    
     switch (id) {
         case 'menu_orcamento': await sendOrcamentoMenu(sock, jid); break;
         case 'menu_manutencao': await sendManutencaoMenu(sock, jid); break;
         case 'menu_administracao': await sendAdministracaoMenu(sock, jid); break;
         case 'admin_suporte':
             await sock.sendMessage(jid, { text: 'Aguarde, em breve você será atendido.' });
+            // 🔥 Inicia pausa + timeout
+            pausarSessaoComTimeout(sock, jid, session);
             break;
         case 'menu_impressoes3d': await sendImpressoesMenu(sock, jid); break;
         case 'imp_catalogo':
@@ -175,9 +315,11 @@ async function handleButtonClick({ sock, jid, button }) {
             break;
         case 'imp_orcamento':
             await sock.sendMessage(jid, { text: 'Aguarde, em breve você será atendido.' });
+            pausarSessaoComTimeout(sock, jid, session);
             break;
         case 'menu_atendente':
             await sock.sendMessage(jid, { text: 'Aguarde, em breve você será atendido.' });
+            pausarSessaoComTimeout(sock, jid, session);
             break;
         case 'menu_principal':
             session.state = 'main_menu';
@@ -191,14 +333,20 @@ async function handleButtonClick({ sock, jid, button }) {
         case 'menu_sair':
             await encerrarAtendimento(sock, jid, session);
             break;
-        case 'voltar_menu': session.state = 'main_menu'; session.fluxo_atual = null; await sendMainMenu(sock, jid); break;
-        default:
-            await sock.sendMessage(jid, { text: '❓ Opção não reconhecida. Digite "menu" para recomeçar.' });
+        case 'voltar_menu':
             session.state = 'main_menu';
+            session.fluxo_atual = null;
             await sendMainMenu(sock, jid);
+            break;
+        default:
+            // 🔥 Botão desconhecido → também inicia atendimento humano
+            console.log(`❓ Botão não reconhecido (${id}), iniciando atendimento humano: ${jid}`);
+            await sendAttendantChoices(sock, jid);
+            session.aguardandoEscolhaAtendimento = true;
     }
 }
 
+// ==================== CRIAÇÃO DO SOCKET ====================
 async function createSocket() {
     const authFolder = 'auth';
     let state;
@@ -210,6 +358,7 @@ async function createSocket() {
         await fs.rm(authFolder, { recursive: true, force: true });
         return createSocket();
     }
+    
     const sock = makeWASocket({
         auth: state,
         browser: Browsers.macOS('Desktop'),
@@ -224,8 +373,10 @@ async function createSocket() {
         syncFullHistory: false,
         markOnlineOnConnect: true
     });
+    
     sock.__botMessageIds = new Set();
     sock.__botSendInProgress = 0;
+    
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (...args) => {
         sock.__botSendInProgress++;
@@ -237,7 +388,9 @@ async function createSocket() {
             sock.__botSendInProgress--;
         }
     };
+    
     sock.ev.on('creds.update', saveCreds);
+    
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
         if (qr) { console.log('📱 Escaneie este QR Code:'); qrcode.generate(qr, { small: true }); }
         if (connection === 'close') {
@@ -250,52 +403,136 @@ async function createSocket() {
             setTimeout(() => startBot(), 5000);
         } else if (connection === 'open') console.log('✅ WhatsApp conectado!');
     });
+    
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
+        
         const message = messages[0];
         if (!message?.message || message.key.remoteJid === 'status@broadcast') return;
+
         const jid = message.key.remoteJid;
+        
+        debugMessageProcessing(message, jid);
+        
         if (message.key.fromMe) {
-            registerAttendantMessage(sock, jid, message.key.id);
+            console.log(`🤖 Mensagem do bot ignorada: ${jid}`);
             return;
         }
+
+        if (jid.endsWith('@g.us')) {
+            console.log(`📋 Mensagem ignorada (grupo): ${jid}`);
+            return;
+        }
+
         const { participant, remoteJidAlt, participantAlt, senderPn, participantPn } = message.key;
-        if (isBlacklisted(jid, participant, remoteJidAlt, participantAlt, senderPn, participantPn)) return;
+        if (isBlacklisted(jid, participant, remoteJidAlt, participantAlt, senderPn, participantPn)) {
+            console.log(`🔒 Número na blacklist ignorado: ${jid}`);
+            return;
+        }
+
+        // 🔥 Se for mensagem do atendente, pausa e ignora
+        if (isMessageFromAttendant(message, jid)) {
+            console.log(`👤 Mensagem do atendente detectada, pausando sessão: ${jid}`);
+            const session = getSession(jid);
+            pausarSessaoComTimeout(sock, jid, session, { silencioso: true });
+            return;
+        }
+
+        // 🔥 Se sessão já está pausada, apenas reinicia timeout e ignora mensagem
+        const session = getSession(jid);
+        if (atendimentoPausado(session)) {
+            console.log(`⏸️ Sessão pausada, reiniciando timeout: ${jid}`);
+            pausarSessaoComTimeout(sock, jid, session, { silencioso: true });
+            return;
+        }
+
+        // Processa texto ou mídia
         const msg = unwrapMessage(message.message);
         const text = getMessageText(msg);
         const mediaTrigger = !text && hasMediaTrigger(msg);
-
+        
         if (text || mediaTrigger) {
-            await handleTextCommand({ sock, jid, text: text || 'menu' });
+            await handleTextCommand({ sock, jid, text: text || 'menu', message });
         }
 
+        // Processa botões
         const template = msg.templateButtonReplyMessage;
         if (template) {
-            await handleButtonClick({ sock, jid, button: { id: template.selectedId, label: template.selectedDisplayText, raw: template } });
+            await handleButtonClick({ 
+                sock, 
+                jid, 
+                button: { 
+                    id: template.selectedId, 
+                    label: template.selectedDisplayText, 
+                    raw: template 
+                },
+                message 
+            });
             return;
         }
+        
         const legacyButton = msg.buttonsResponseMessage;
         if (legacyButton) {
-            await handleButtonClick({ sock, jid, button: { id: legacyButton.selectedButtonId, label: legacyButton.selectedDisplayText, raw: legacyButton } });
+            await handleButtonClick({ 
+                sock, 
+                jid, 
+                button: { 
+                    id: legacyButton.selectedButtonId, 
+                    label: legacyButton.selectedDisplayText, 
+                    raw: legacyButton 
+                },
+                message 
+            });
             return;
         }
+        
         const nativeFlow = msg.interactiveResponseMessage?.nativeFlowResponseMessage;
         if (nativeFlow?.paramsJson) {
             try {
                 const params = JSON.parse(nativeFlow.paramsJson);
                 const id = params.id || params.button_id || params.buttonId;
-                if (id) await handleButtonClick({ sock, jid, button: { id, label: params.display_text, raw: nativeFlow } });
+                if (id) {
+                    await handleButtonClick({ 
+                        sock, 
+                        jid, 
+                        button: { 
+                            id, 
+                            label: params.display_text, 
+                            raw: nativeFlow 
+                        },
+                        message 
+                    });
+                }
             } catch (err) {
                 console.error('❌ Resposta de botão inválida:', err.message);
             }
         }
     });
+    
     return sock;
 }
 
 async function startBot() {
-    try { await createSocket(); console.log('🤖 Bot iniciado!'); }
-    catch (err) { console.error('❌ Erro fatal:', err); await fs.rm('auth', { recursive: true, force: true }); startBot(); }
+    console.log('🔒 BLACKLIST CARREGADA:');
+    try {
+        const { getBlockedNumbers } = require('./shared/blacklist');
+        const blockedNumbers = getBlockedNumbers ? getBlockedNumbers() : [];
+        console.log(`  - Total: ${blockedNumbers.length} números`);
+        blockedNumbers.forEach(num => console.log(`    • ${num}`));
+    } catch (err) {
+        console.log('  - Erro ao carregar blacklist:', err.message);
+    }
+    console.log(`⏰ Timeout do atendente: ${ATTENDANT_PAUSE_MS / 60000} minutos`);
+    console.log('========================================\n');
+    
+    try { 
+        await createSocket(); 
+        console.log('🤖 Bot iniciado!'); 
+    } catch (err) { 
+        console.error('❌ Erro fatal:', err); 
+        await fs.rm('auth', { recursive: true, force: true }); 
+        startBot(); 
+    }
 }
 
 module.exports = { createSocket, handleTextCommand, handleButtonClick, startBot };
